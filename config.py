@@ -1,6 +1,6 @@
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8701178944:AAEXl-hw4D5vtQQ0C9Au4p88dJElw_mmQK0")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 DB_PATH = os.getenv("DB_PATH", "vocab_bot.db")
 
 # Кривая Эббингауза: интервалы повторений в минутах
