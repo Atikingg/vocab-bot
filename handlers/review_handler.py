@@ -36,7 +36,7 @@ async def handle_review(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         updated = await _run(db.get_word, word_id, _uid(update))
         if updated and updated["next_review"] == "":
             await q.edit_message_text(
-                f"🏆 *{word['word']}* выучено! Поздравляем!\n\n"
+                f"🏆 *{word['word']}* выучено! \n\n"
                 "Оно больше не появится в повторениях.",
                 parse_mode="Markdown",
                 reply_markup=main_menu_kb()

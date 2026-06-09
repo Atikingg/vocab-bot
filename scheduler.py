@@ -33,8 +33,7 @@ async def _check_and_send(app: Application):
             continue
         user_id = word["user_id"]
         text = (
-            f"🔔 *Пора повторить слово!*\n\n"
-            f"*{word['word']}* — ?\n"
+            f"*{word['word']}* — {word['translation']}\n"
             f"Язык: {word['lang_name']}"
         )
         try:

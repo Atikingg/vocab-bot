@@ -58,12 +58,22 @@ async def word_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def word_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Алиас для пагинации — просто пробрасываем в word_list."""
     q = update.callback_query
-    # data: word_page:lang_id:page → переписываем в word_list:lang_id:page
+    await q.answer()
     parts = q.data.split(":")
-    q.data = f"word_list:{parts[1]}:{parts[2]}"
-    return await word_list(update, ctx)
+    lang_id = int(parts[1])
+    page = int(parts[2])
+    lang = await _run(db.get_language, lang_id, _uid(update))
+    if not lang:
+        await q.edit_message_text("⚠️ Язык не найден.")
+        return ConversationHandler.END
+    words = await _run(db.get_words, _uid(update), lang_id)
+    await q.edit_message_text(
+        f"📚 *{lang['name']}* — {len(words)} сл.",
+        parse_mode="Markdown",
+        reply_markup=word_list_kb(words, lang_id, page)
+    )
+    return ConversationHandler.END
 
 
 # ─── Open ──────────────────────────────────────────────────────────────────────
@@ -110,10 +120,12 @@ async def word_add_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("⚠️ Язык не найден.")
         return ConversationHandler.END
     await q.edit_message_text(
-        f"➕ *Добавление слова* в «{lang['name']}»\n\n"
-        "Введите слово и перевод в формате:\n"
-        "`слово — перевод`\n\n"
-        "Например: `hello — привет` или `cat: кот`",
+        f"➕ *Добавление слов* в «{lang['name']}»\n\n"
+        "Введите одно слово или сразу список — каждое с новой строки:\n\n"
+        "`hello — привет`\n"
+        "`cat — кот`\n"
+        "`dog — собака`\n\n"
+        "Разделитель: дефис, двоеточие или слеш.",
         parse_mode="Markdown",
         reply_markup=cancel_kb(f"lang_open:{lang_id}")
     )
@@ -127,32 +139,65 @@ async def word_add_receive(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Сессия истекла. Начните заново.", reply_markup=cancel_kb())
         return ConversationHandler.END
 
-    pair = normalize_word_pair(raw)
-    if not pair:
+    # Разбиваем на строки и парсим каждую
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+
+    added = []
+    duplicates = []
+    failed = []
+
+    for line in lines:
+        pair = normalize_word_pair(line)
+        if not pair:
+            # Пробуем игнорировать строку если она совсем не похожа на пару
+            if len(line) > 1:
+                failed.append(line)
+            continue
+        word, translation = pair
+        ok, reason = await _run(db.add_word, _uid(update), lang_id, word, translation)
+        if ok:
+            added.append(f"{word} — {translation}")
+        elif reason == "exists":
+            duplicates.append(word)
+
+    # Формируем ответ
+    parts = []
+
+    if added:
+        if len(added) == 1:
+            parts.append(f"✅ Добавлено: *{added[0]}*\n\nПервое повторение через 20 минут. 🕐")
+        else:
+            words_list = "\n".join(f"• {w}" for w in added)
+            parts.append(f"✅ Добавлено {len(added)} слов:\n{words_list}\n\nПервое повторение через 20 минут. 🕐")
+
+    if duplicates:
+        dup_list = ", ".join(f"*{w}*" for w in duplicates)
+        parts.append(f"⚠️ Уже существуют: {dup_list}")
+
+    if failed:
+        fail_list = "\n".join(f"• {l}" for l in failed[:5])  # не более 5
+        parts.append(f"❓ Не удалось распознать:\n{fail_list}\nФормат: `слово — перевод`")
+
+    if not added and not duplicates and not failed:
         await update.message.reply_text(
-            "⚠️ Не удалось распознать формат.\n\n"
-            "Введите в виде: `слово — перевод`\n"
-            "Или: `слово: перевод`",
+            "⚠️ Не удалось распознать ни одного слова.\n\n"
+            "Введите в формате:\n`слово — перевод`",
             parse_mode="Markdown",
             reply_markup=cancel_kb(f"lang_open:{lang_id}")
         )
         return WORD_ADD
 
-    word, translation = pair
-    ok, reason = await _run(db.add_word, _uid(update), lang_id, word, translation)
-    if not ok and reason == "exists":
+    if not added and not duplicates:
         await update.message.reply_text(
-            f"⚠️ Слово *{word}* уже есть в этом языке.\nВведите другое слово:",
+            "\n\n".join(parts),
             parse_mode="Markdown",
             reply_markup=cancel_kb(f"lang_open:{lang_id}")
         )
         return WORD_ADD
 
-    lang = await _run(db.get_language, lang_id, _uid(update))
     words = await _run(db.get_words, _uid(update), lang_id)
     await update.message.reply_text(
-        f"✅ *{word}* — {translation} добавлено!\n\n"
-        "Первое повторение придёт через 20 минут. 🕐",
+        "\n\n".join(parts),
         parse_mode="Markdown",
         reply_markup=word_list_kb(words, lang_id)
     )
@@ -174,7 +219,7 @@ async def word_edit_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(
         f"✏️ *Редактирование*\n\n"
         f"Текущее: *{word['word']}* — {word['translation']}\n\n"
-        "Введите новое значение в формате:\n`слово — перевод`",
+        "Введите новое значение:\n`слово — перевод`",
         parse_mode="Markdown",
         reply_markup=cancel_kb(f"word_open:{word_id}")
     )
@@ -278,7 +323,6 @@ async def word_move_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(msg, reply_markup=cancel_kb(f"word_open:{word_id}"))
         return ConversationHandler.END
     lang = await _run(db.get_language, new_lang_id, _uid(update))
-    word = await _run(db.get_word, word_id, _uid(update))
     words = await _run(db.get_words, _uid(update), new_lang_id)
     await q.edit_message_text(
         f"✅ Слово перемещено в *{lang['name']}*.\nПрогресс повторений сброшен.",
@@ -302,6 +346,6 @@ CALLBACK_HANDLERS = [
     CallbackQueryHandler(word_add_start,     pattern="^word_add:"),
     CallbackQueryHandler(word_edit_start,    pattern="^word_edit:"),
     CallbackQueryHandler(word_delete,        pattern="^word_delete:"),
-    CallbackQueryHandler(word_move_start,    pattern="^word_move:"),
+    CallbackQueryHandler(word_move_start,    pattern="^word_move:[0-9]+$"),
     CallbackQueryHandler(word_move_confirm,  pattern="^word_move_to:"),
 ]
